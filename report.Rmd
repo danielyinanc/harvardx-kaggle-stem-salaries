@@ -1,0 +1,631 @@
+---
+title: "HarvardX PH125.9x STEM Salaries"
+author: "Daniel Yinanc"
+date: "2/15/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Dependencies installed if required
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
+if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
+if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+
+# GPU version needs to be installed due to massive data size
+# from instructions can be found here: 
+# https://xgboost.readthedocs.io/en/latest/install.html#r 
+# Also requires CUDA capable (NVIDIA) graphics card 
+# and additional library installations for platform specific
+# CUDA packages
+
+#if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
+
+# Enable required dependencies
+library(tidyverse)
+library(caret)
+library(data.table)
+library(readr)
+library(janitor)
+library(corrplot)
+library(xgboost)
+library(caretEnsemble)
+library(naniar)
+```
+
+# 1. Introduction
+
+Data Science and STEM salaries dataset is a data set created in Kaggle via scrapping data from levels.fyi, a premier website for salary and total comparisons for data scientists and other technology workers across companies, locations, titles and levels.
+
+Level.fyi dataset contains over 62,000 anonymous salaries collected through the time of the website. It is data cleaned a very tiny bit but there are a lot of data quality issues as we will illustrate below.
+
+Our goal here is to build a predictive model that can predict total annual compensation of a tech worker from other variables, hence creating a tool that can aid tech company management, human resources and candidates themselves in salary negotiations. A high accuracy model that can predict the total annual compensation of a candidates part position or a target position will be of great benefit in the opaque labour market we live in, where actual values of compensation are a closely guarded secret.
+
+Machine learning models we will progress from the baseline linear regression to models of greater sophistication utilizing different predictors from the dataset, culminating with gradient boosted model as the best model. We will present all models in terms of their RMSE to demonstrate the principles of model development.
+
+As data-size is extremely large, I used parallels library for CPU level parallelization and had to find out how to use GPU accelerated XGBoost algorithm for model development. Even with all optimization work I undertook, model training takes many hours end to end. A lot of these long-running code snippets are NOT being evaluated within the RMarkdown. Solution code submitted contains same code and can be utilized for reproduction.
+
+# 2. Data Exploration
+
+## 2.1 Data Exploration
+
+Below are variables in the Levels.fyi dataset.
+
+-   timeStamp: When the data was recorded. (numeric)
+-   company: Name of the company (character)
+-   level: Company specific levels (character)
+-   title: Role specific title (character)
+-   totalyearlycompensation: Total paid out compensation annually. (numeric)
+-   location: Job location. (char)
+-   yearsofexperience: Years of experience (numeric)
+-   yearsatcompany: Years of experience at the reported company (numeric)
+-   tag: Search tags for classifying job categories (character)
+-   basesalary: Base cash component of compensation (numeric)
+-   stockgrantvalue: Stock grant component of compensation (numeric)
+-   bonus: Annual cash bonus component of compensation (numeric)
+-   gender: Gender (numeric)
+-   otherdetails: Comments and other meta-data provided by submitters (character)
+-   cityid: Levels.fyi's internal location identifier (numeric)
+-   dmaid: Levels.fyi's internal identifier (numeric)
+-   rowNumber: Row number in data source (numeric)
+-   Masters_Degree: Boolean for master degree (numeric)
+-   Bachelors_Degree: Boolean for bachelor degree (numeric)
+-   Doctorate_Degree: Boolean for doctorate degree (numeric)
+-   Highschool: Boolean for highschool degree (numeric)
+-   Some_College: Boolean for associate or taking some courses (numeric)
+-   Race_Asian: Boolean for being asian (numeric)
+-   Race_White: Boolean for being asian (numeric)
+-   Race_Two_Or_More: Boolean for having parents in two or more races (numeric)
+-   Race_Black: Boolean for being black (numeric)
+-   Race_Hispanic: Boolean for being hispanic (numeric)
+-   Race: Race of the submitter (character)
+-   Education: Education level of the submitter (character)
+
+### 2.1.2 Levels.fyi dataset
+
+Download locations can be found for result replication purposes
+
+-   <https://www.kaggle.com/jackogozaly/data-science-and-stem-salaries>
+-   <https://www.levels.fyi/>
+
+### 2.1.3 Data Load
+
+In order to predict the ratings as a recommendation engine, I need to load initial variables to dataframes and transform them to a format that can be used later on.
+
+```{r dataprep, warning=FALSE}
+fl <- '~/datasets/Levels_Fyi_Salary_Data.csv'
+raw_data <- read_csv(fl)
+
+raw_data_sanitized <- clean_names(raw_data)
+
+# Drop id columns and derived columns
+raw_data_sanitized <- raw_data_sanitized %>% select(-cityid, -dmaid, -row_number)
+
+# Drop base_salary and bonus and stock grant variables as they are part of  
+# totalyearlycompensation
+# Drop highly correlated columns
+raw_data_sanitized <- raw_data_sanitized %>% select(-basesalary, -stockgrantvalue, -bonus)
+```
+
+## 2.2 Basic Summary Statistics
+
+### 2.2.0 First few entries
+
+As we can see from the very first entries, there are a lot of missing data entries in categorical variables such as gender and education related variables.
+
+Also we can immediately see that variable scales do not match, indicating data itself is not normalized and/or scaled in any way.
+
+```{r glimpse_data, echo=FALSE}
+glimpse(raw_data_sanitized)
+```
+
+# 3. Dependent Variable Analysis
+
+## 3.1 Totalyearlycompensation
+
+Our models will target to predict Total Yearly Compensation (totalyearlycompensation) using all other variables. Let's take a peek at the salient features of this variable for us to understand what this variable is and any important properties we can glean.
+
+```{r totalyearlycompensation_stats }
+raw_data_sanitized %>% select(totalyearlycompensation) %>%
+  summarise(
+    n = n(),
+    mean = mean(totalyearlycompensation),
+    sd = sd(totalyearlycompensation),
+    min = min(totalyearlycompensation),
+    max = max(totalyearlycompensation)
+  )
+```
+
+We can quickly see that maximum value for our dependent variable is \$4,680,000 while the minimum value is \$10,000. These numbers with a mean of \$238,000 indicate a very skewed distribution, which can thwart a lot of analytical approaches.
+
+Let's visually see how skewed it is via a candlestick plot, indicating a major skewed variable with very large outliers on the top range.
+
+```{r comp_boxplot, echo= FALSE}
+boxplot(raw_data_sanitized[,c(5)], main="Total Yearly Compensation")
+```
+
+```{r logcomp_transform, echo=FALSE}
+raw_data_sanitized <- raw_data_sanitized %>% mutate(log_totalcomp =  
+                                                      log(totalyearlycompensation))
+```
+
+```{r logcompboxplot, echo=FALSE}
+boxplot(raw_data_sanitized[,c(24)], main="Log Total Yearly Compensation")
+```
+As we can see, even a logarithmic transformation did not fix the issue of skew in a meaningful manner as we can easily see substantial outliers on top and bottom of the logarithmic range now. 
+
+There does not seem to exist an easily discovered transformation that can lead to predicted variable to start to have some desirable distribution characteristics.
+
+# 4. Independent Variables Analysis
+
+This section covers our analysis of all other variables to assess if we should include them in our predictive models or not.
+
+## 4.1 Categorical Variables
+
+These variables are of the form of character strings and without exception contain missing entries as well as potentially typos. These data issues are typical of human input via web forms.
+
+### 4.1.1 Company
+
+Company is the name of the company for the submitted compensation package. Vast majority of submitted salaries and profiles belong to a handful of companies. This independent variable suffers from very strong imbalance, reducing its overall predictive power substantially.
+
+Out of 1623 companies, top 10 firms represent over 40 percent of all entries, another clear indication of labour market power of Amazon, Microsoft, Google, Facebook and Apple with a few notable others such as Oracle, Intel, Cisco and IBM rounding out the top 10.
+
+```{r company_elem_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(company) %>% count() %>% arrange(desc(n))
+```
+
+We can also see that company average annual yearly compensation is different from each other, strongly indicating predictive ability.
+
+```{r company_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(company) %>% summarize(mean_comp = mean(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+### 4.1.2 Level
+
+Levels are company specific employee compensation categorizations such as ICT3-6 for Apple, L3-8 for Google that determine salary bands, allowed bonus ratios and maximum RSU grants.
+
+We can see below from grouped means, levels themselves are actually a by-product of company variable, as they are inventions of companies themselves to determine where in reporting and compensation hierarchy people are.
+
+```{r levels_company_stats}
+raw_data_sanitized %>% group_by(company, level) %>% summarize(mean_comp = mean(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+
+```
+As we are utilizing company as an independent variable due to its clear predictive power, another highly correlated variable like levels we won't be introducing.
+
+Another problem we are facing with levels is illustrated below, entries are incorrect, Facebook does not have a level called "L8 Director Product Management" or "L7 Product Management", it most likely is a title/function and level combined, reducing variable's utility very substantially. Resolving these data inconsistencies is way beyond the scope of this assignment.
+
+Self-provided data like this has these natural weak points that we must take into consideration when selecting variables to use as part of our model.
+
+```{r levels_stats}
+raw_data_sanitized %>% filter(company == "Facebook") %>% group_by(level) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n()) %>% arrange(desc(mean_comp))
+```
+
+### 4.1.3 Title
+
+Title variable represents job titles on submitted compensation data by end users. Due to various historical factors as well as heterogeneity within the industry, titles themselves are not transferrable between technology firms. Vice-President title on an quantitative tech firm indicate a mid-level programmer while same title indicates a near top level executive on Google or Facebook. This has obvious implications on the predictive power of title alone, however this does not mean that it has no relevance to compensation.
+
+Considering these factors, let us see if there is a discernible difference in average salaries for different titles
+
+```{r title_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(title) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+As we can see above, titles certainly have an impact on average salaries, this is a strong finding with number of data points backing it. However as we anticipated standard deviation is very high within title compensation levels indicating the heterogeneity of what an actual title means to a company and within the industry.
+
+This level of standard deviation decreases predictive power of the variable, introducing potential overfitting. As a result, we won't be using it for building our models. 
+
+### 4.1.4 Location
+
+Location variable is the physical location where the compensation data pertains to. From domain knowledge of tech industry compensations, we would expect to see a strong location dependency here, favoring Silicon Valley.
+
+Let us see if this prediction of ours have the data backing needed to support this hunch to the level of us elevating location as a strong predictor variable.
+
+```{r location_stats}
+raw_data_sanitized %>% group_by(location) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+If we clean-up one-off locations by asking for at least 25 data points on a single location, real picture emerges far more clearly indicating California as the main location for high tech salaries. This is in congruence with our domain knowledge hinting at Silicon Valley effect on salaries.
+
+```{r location_stats_cleanedup}
+raw_data_sanitized %>% group_by(location) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% filter(cnt >= 25) %>% arrange(desc(mean_comp))
+```
+
+Except a single entry from state of Washington, all top entries are in continental United States and are all in California. Not only that but all these cities and towns are within the definition of Silicon Valley. 
+
+We will be using this variable in our predictive model as a result.
+
+### 4.1.5 Gender
+
+Gender is not a mandatory field on levels.fyi submissions, it is the gender of the submitted recipient. We would expect gender has an impact on ICT jobs as illustrated by domestic and international research [1,2]. Female compensation we expect to have a negative impact on total annual compensation.
+
+Let's see if data provides support for our domain knowledge and academic research regarding gender impact on compensation. Considering the fact that these values are all self-reported with no verification, not validating or invalidating external research.
+
+```{r gender_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(gender) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+There are clear data issues with Gender variable, with a single entry of gender "Title: Senior Software Engineer" and 19540 NAs and 400 Others, a full 1/3 of entries are unavailable.
+
+Having said that, a simple outliers analysis below indicate a small but perceptible skew towards higher salaries in Males in comparison to Females.
+
+```{r gender_boxplot, echo=FALSE}
+raw_data_sanitized %>% filter(gender %in% c("Female", "Male")) %>%  
+  ggplot(aes(x = gender, y = totalyearlycompensation)) +     geom_boxplot()
+```
+
+Difference between averages are too small to derive a meaningful conclusion, if there is an impact it is not visible on elementary statistics nor on a plot.
+
+```{r gender_boxplot_limited, echo=FALSE}
+raw_data_sanitized %>% filter(gender %in% c("Female", "Male")) %>% ggplot(aes(x = gender, y = totalyearlycompensation)) +     geom_boxplot() +ylim(0,500000)
+```
+
+We won't be using this variable as part of our predictive model as univariate analysis did not lead us to conclude it can have an impact.
+
+### 4.1.6 Education
+
+Education vairables are masters_degree, bachelors_degree, doctorate_degree, highschool, some_college, and education.
+
+
+```{r education_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(education) %>%
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+About 50 percent of all compensation entries lack education variables are missing as above. We will not be using education as a predictive variable as significant lack of available data reduced its usefulness. 
+
+```{r education_plot, echo=FALSE}
+raw_data_sanitized %>% filter(gender %in% c("Female", "Male")) %>%  
+  ggplot(aes(x = education, y = totalyearlycompensation)) + geom_boxplot()  +ylim(0,500000)
+```
+
+We won't be using this variable as part of our predictive model as univariate analysis did not lead us to conclude it can have an impact.
+
+### 4.1.7 Race
+
+Race variables which are race_asian, race_white, race_two_or_more, race_black, race_hispanic and race are to capture voluntary disclosures of the submitters race. From limited academic research [3,4] there is outstanding research questions regarding race to have an impact on total annual compensation for tech workers. As field is rapidly evolving, conclusions are not fully fleshed out and supported yet.
+
+```{r race_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(race) %>%  
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+However 2/3 of data is missing with 40,215 NAs which reduces the usability of this variable for us. We won't be using it as part of our predictive model due to majority of it being unreported.
+
+### 4.1.8 Tag
+
+Tags are variables created by levels.fyi to perform Search Engine Optimization (SEO), these synthetic variables are not part of original submitted data and will not be used for prediction purposes. Their exact definitions and methodology of generation is unknown and unreliable.
+
+
+### 4.1.9 Otherdetails
+
+Otherdetails is another categorical variable created by levels.fyi to capture comments by submitters, without a clear definition nor methodology of creation. We will not be using Otherdetails as part of our prediction model.
+
+## 4.2 Numerical Variables
+
+There are 12 numerical independent variables, out of which only two of them are numerical variables (yearsofexperience and yearsatcompany) of interest to us.
+
+Remaining ten only contain 0,1 or NA as variables, they are an artifact of CSV conversion process. They were meant to indicate if submitter response are affirmative or negative for a particular data column. They are already dealt with as part of race, gender and education aggregated categorical variables above. These categorical variables parse Boolean responses in those fields and aggregate them to final combined variables.
+
+### 4.2.1 Yearsofexperience
+
+Yearsofexperience is the variable indicating experience candidate has at the time of compensation submission. It is a numeric variable containing fractional values such as 1.5 as well as full integers.
+
+Let us take a look if we can see a relationship between yearsofexperience and totalyearlycompensation as below:
+
+```{r yearsofexperience_stats, echo=FALSE}
+raw_data_sanitized %>% group_by(yearsofexperience) %>%  
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+There seems to be a relationship between but it is not clear in tabular format how it actually it is working, does compensation increase with years of experience or other way around?
+
+Let us take a look at an x-y graph as below:
+
+```{r yearsofexperience_plot, echo=FALSE}
+raw_data_sanitized %>% group_by(yearsofexperience) %>%  
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation))  %>% ggplot(aes(x=yearsofexperience,y=mean_comp)) + geom_point()
+```
+
+There are some outliers but we are able to see an almost linear relationship between 0 to 20 years is easy to spot on the graph above. Total compensation seems to plateau at/around 20 years of experience, in line with some outstanding research regarding age-ism in tech sector [5].
+
+We will be using yearsofexperience as a predictor variable.
+
+### 4.2.2 Yearsatcompany
+
+Yearsatcompany is the variable indicating the years of experience submitter has in the firm compensation data relates to.
+
+Is there a relationship between years spent at a company and total annual compensation, let's see in tabular firm if we can glean an easy to spot relationship:
+
+```{r yearsatcompany_stat, echo=FALSE}
+raw_data_sanitized %>% group_by(yearsatcompany) %>%  
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+```
+
+If we just take a look at the average values, there appears to be a very small and linear relationship between years of time one spends in a company and the total compensation one receives in the end. However we can also easily observe that number of data points for 25+ years experience is very sparse.
+
+```{r yearsatcompany_plot, echo=FALSE}
+raw_data_sanitized %>% group_by(yearsatcompany) %>%  
+  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev =  
+              sd(totalyearlycompensation))  %>% ggplot(aes(x=yearsatcompany,y=mean_comp)) + geom_point()
+```
+
+There appears to be a low magnitude linear relationship starting from 5 years of work experience to 20 years, impact seems to be minor. As a result, we won't be using it as part of our predictive model.
+
+### 4.2.3 Numerical Variable Correlations
+
+Numerical variable correlations are important considerations when we are looking into impact of predictive power of independent variables.
+
+```{r corr}
+only_num_vars <- raw_data_sanitized %>% select(yearsofexperience, yearsatcompany,  
+                                               totalyearlycompensation)
+corr_values <- cor(only_num_vars, use = "pairwise.complete.obs")
+corr_matrix <- as.matrix(corr_values[,"totalyearlycompensation"])
+
+corr_high <- names(which(apply(corr_matrix,1, function(x) abs(x) > 0.25)))
+cor_num_var <- corr_values[corr_high, corr_high]
+corrplot.mixed(cor_num_var, tl.col = "black", tl.pos = "lt")
+```
+
+As we can see above, yearsofexperience is the only variable demonstrating high  correlation with totalyearlycompensation, we will be using it in our predictive model.
+
+This finding supports our exploratory analysis regarding yearsatcompany, supporting our preliminary conclusion to leave it out of our predictive model.
+
+
+# 5. Model training
+
+We will be developing machine learning algorithm for predicting totalyearlycompensation variable utilizing yearsofexperience, company and location variables.
+
+Using linear regression as the base model, we will build two additional machine learning models of greater complexity: ElasticNet and XGBoost to see which one will have the lowest RMSE score as our comparison metric.
+
+## 5.1 Downsampling 
+
+Even with paralls library achieiving CPU threading and GPU acceleration, full training cycle takes many hours and requires over 50GB of memory. Recognizing these limitations, I used randomly sampled results which lead to some interesting insights about data size and algorithmic efficiency, which will be discussed fully in conclusion section.
+
+## 5.2 Training and Test Set Creation
+
+We will divide data into training and test sets, 90 percent will be in training and 10 percent will be in test dataframes respectively.
+
+In order to ensure that categorical variables of interest (company and location) do not pose a mismatch issue when trained model is predicting on test-set, we are using a semi-join below to ensure test dataset only contains the same categorical variables that exist in training set.
+
+```{r initial_data_load}
+# Create train and test datasets -- 0.9 train, 0.1 test
+# By changing size variable to 1000, 10000 and 30000
+# Report results can be replicated
+
+set.seed(1,sample.kind="Rounding")
+size <- nrow(raw_data_sanitized)
+
+relevant_data <- raw_data_sanitized %>% select(totalyearlycompensation, yearsofexperience, company, location)
+complete_data <- relevant_data[sample(nrow(raw_data_sanitized), size),]
+
+test_index <- createDataPartition(y=complete_data$totalyearlycompensation, times=1, p=0.1, list=FALSE)
+
+train_set <- complete_data[-test_index,]
+temp <- complete_data[test_index,]
+
+test_set <- temp %>% 
+  semi_join(train_set, by = "company") %>%
+  semi_join(train_set, by = "location")
+  
+# Add rows removed from test set back into train set
+removed <- anti_join(temp, test_set)
+train_set <- rbind(train_set, removed)
+```
+
+## 5.3 Base Model: Linear regression
+
+Considering we are looking for a numerical answer, linear regression is the most obvious place to start building our base model where we compare all other models to.
+
+Following code produces our base model.
+
+```{r base_lm, eval= FALSE}
+
+base_lm <- lm(totalyearlycompensation ~ yearsofexperience  + 
+                company + location,  data=train_set)
+lm_predictions <- predict(base_lm, test_set, type="response")
+lm_rmse <- RMSE(lm_predictions,test_set$totalyearlycompensation)
+```
+
+RMSE for the linear regression base model is $88244.16.
+
+### 5.4 Optimized Models
+
+We will be using optimizing via caret package's train function, all of which will use the following training control that ensures there will be five cross validations conducted in each train run.
+
+This is here parallelization comes into play, as with this large datasize, running a long running training multiple times is averted due to multi-threading.
+
+However as pointed below, parallelization is known to introduce reproducibility concerns, if facing it, please run as sequential. Unfortunately this problem originates from upstream package authors and caret offers no complete solution to ensure this problem can be solved at trainControl level or at any configurable caret parameter level [8].
+
+```{r train_control}
+train_control_default <- caret::trainControl(
+  method = "cv",
+  number=5,
+  verboseIter = FALSE, # no training log
+  allowParallel = TRUE, # FALSE for reproducible results 
+  savePredictions="final"
+)
+```
+
+## 5.4.1 Optimized Linear Regression
+
+We will optimize linear regression model via running multiple cross-validation sets to ensure we are obtaining the best possible weights mimizing RMSE.
+
+As there are no tunable hyper-parameters except the intercept, we anticipate it to match the base linear regression case.
+
+Code below will accomplish this task:
+
+```{r lm_optimized, eval= FALSE}
+
+lm_optimized <- train(totalyearlycompensation ~ yearsofexperience  + company + location,
+                      data=train_set,
+                      method="lm",
+                      na.action  = na.pass,
+                      trControl = train_control_default)
+
+lm_optimized_predictions <- predict(lm_optimized, test_set, type="raw")
+lm_optimized_rmse <- RMSE(lm_optimized_predictions,test_set$totalyearlycompensation)
+
+```
+
+As predicted, optimized linear regression result matches the base linear case in line with theory.
+
+Same RMSE score as the linear regression case, $88244.16.
+
+### 5.4.2 Elastic Net Regression
+
+Elastic net model is a regularized regression model combining both Lasso and Ridge regression's L1 and L2 penalties.
+
+Considering we have a very large number of categorical variables, L1 penalty we expect to help us reduce feature-space, while L2 helps us improve accuracy by bringing results closer to a mean value.
+
+There are two tunable parameters Alpha and Beta where Alpha is for the elastic net mixing parameter, 0 represents a ridge while 1 represents lasso (default).
+
+```{r glmnet, eval=FALSE}
+
+tuneGrid <- expand.grid(alpha = seq(0, 1, 0.05), lambda = seq(0.0001, 1, length = 10))
+
+glmnet_optimized <- train(totalyearlycompensation ~ yearsofexperience  + 
+                            company + location,
+                      data=train_set,
+                      method="glmnet",
+                      tuneGrid = tuneGrid,
+                      metric = "RMSE",
+                      na.action  = na.pass,
+                      trControl = train_control_default)
+
+glmnet_optimized_predictions <- predict(glmnet_optimized, test_set, type="raw")
+glmnet_optimized_rmse <-  
+  RMSE(glmnet_optimized_predictions,test_set$totalyearlycompensation)
+
+```
+
+Results are better than the base case with an RMSE of $88001.53. 
+
+
+### 5.3.3 Gradient Boost Tree
+
+Gradient boosting is a technique that is designed to take advantage of ensembling a large number of weak predictors (usually decision trees) 
+
+```{r xgboost, eval=FALSE}
+xg_tune_grid <- expand.grid(
+  nrounds = seq(from = 200, to = 1000, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(2, 3, 4, 5, 6),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+xg_optimized_model <- train(totalyearlycompensation ~ yearsofexperience  +  
+                              company + location,
+                          data=train_set,
+                          trControl = train_control_default,
+                          tuneGrid = xg_tune_grid,
+                          method = "xgbTree",
+                          na.action  = na.pass,
+                          tree_method="gpu_hist",
+                          verbose = TRUE)
+
+xgboost_optimized_predictions <- predict(xg_optimized_model, test_set, type="raw")
+xgboost_optimized_rmse <- RMSE(xgboost_optimized_predictions,test_set$totalyearlycompensation)
+
+```
+
+XGBoost model's RMSE is $85333.43, lowest in comparison to other models. Also must point out that it is fastest to train with such a large dataset, thanks to GPU acceleration.
+
+```{r load_results, echo=FALSE}
+model_results <- readRDS('results.RDS')
+```
+
+# 6. Results
+Utilizing caret and its training control and tuning capabilities to optimize all three models below.
+
+When possible utilized parallels package for CPU intensive models (lm and glmnet) and GPU optimized version of XGBoost package in order to be able to process this large dataset utilizing a modest home computer as IDE.
+
+In order to build the case for best model, we developed our machine learning models with progressively using more data starting with 1,000 data entries to culminating with the entire data set (62,000+).
+
+We have looked into comparing results of three machine learning models:
+- Baseline: Linear regression, using lm package. 
+- Generalized Regression: Lasso and Ridge regression combined, using glmnet package.
+- Gradient Boosting: Gradient boosted decision trees, using xgboost package. 
+
+
+## 6.1 Model Results
+We found best model to be XGBoost with an RMSE of 85333.43, considering our maximum yearly compensation is $4,680,000+, with a standard deviation of $133051.6, our optimized XGBoost model's RMSE is about 65% of the standard deviation of data.
+
+Below, we can find the comparison between all three models trained using different data sizes:
+
+```{r results_table}
+knitr::kable(model_results, caption="All models and results")
+```
+## 6.2 Important Variables
+As we look into variables we utilized in the model through varImp command, we can obtain a list of critical list of variables that shed a very strong light on total compensation for tech employees.
+
+List of variables are as following:
+
+* yearsofexperience
+* company
+  * Facebook
+  * Google
+  * Netflix
+  * Snap
+  * Apple
+  * Uber
+  * LinkedIn
+* location
+  * San Francisco,CA
+  * Seattle, WA
+  * Bengalore, India
+
+This finding matches with domain research about concentrated tech cities and their impact on STEM salaries, demonstrating how our gradient boosted method gleaned the importance of Silicon Valley and top tech firms as core ingredients of high compensation with years of experience in the field.
+
+## 6.3 Impact of Data Size on Model Development
+A very interesting finding above is, for smaller data sizes linear regression outpaces both lasso and ridge regression easily, which was surprising. However considering the number of companies (1623), and the fact that company variable is actually transformed via one-hot-encoding under the hood by Caret, we can perhaps see why.
+
+Exact requirements for a machine learning model's data point needs is still an academic debate [6], however a number of "thumb rules" are presented by practitioners [7] pointing out a certain number per independent variable as the minimum.
+
+About 1600 variables in the final model also has a major impact on performance which we can easily see if we consider that our training data matrix is 55,800 x 1625, vast majority of which is long-text. In order to run the full model, I had to upgrade memory of my laptop to 64GB and it was barely enough. 
+
+# 7. Conclusion
+We can see from above analysis and modelling results that yearsofexperience, company and location are the primary drivers of total compensation of a tech worker. 
+
+From our modelling efforts, we can easily conclude that XGBoost is the clear winner in algorithmic comparison held between ElasticNet, Linear Regression and Gradient Boosted Trees on our full levels.fyi dataset.
+
+We must consider the limitations of the study such as, data quality concerns on many categorical variables such as titles, levels and others made direct use of them quite difficult to achieve. Also missing data on several other categorical variables such as gender, race and education also limited their utility for our modelling approach.
+
+Another key concern we must take into account is the self-reported nature of levels.fyi dataset, potentially introducing bias that we are unable to account for as compensation data is one of the most heavily guarded and protected secret of individuals and companies alike. As far as my research goes, I could not locate another data source to use as a comparison to be able to validate levels.fyi dataset.
+
+Next step in enhancing accuracy of our predictive model is to focus on data clean-up efforts to clean some of the categorical variables and develop mechanisms to deal with missing values in other categorical values. Both of these efforts require domain knowledge such as actual levels within the firms as well as context specific methodologies to account for missing values for education and/or race and/or gender variables. Extant academic research imply relationship between these variables and total annual compensation, which means if we are able to overcome data quality concerns, they should aid in building an even more accurate predictive model.
+
+
+
+# 8. References
+
+[1] Segovia-Pérez, M., Castro Núñez, R.B., Santero Sánchez, R. and Laguna Sánchez, P. (2020), Being a woman in an ICT job: an analysis of the gender pay gap and discrimination in Spain. New Technology, Work and Employment, 35: 20-39. <https://doi.org/10.1111/ntwe.12145>
+
+[2] Goldin, Claudia, Sari Pekkala Kerr, Claudia Olivetti, and Erling Barth. 2017. "The Expanding Gender Earnings Gap: Evidence from the LEHD-2000 Census." American Economic Review, 107 (5): 110-14. <https://doi.org/10.1257/aer.p20171065>
+
+[3] Jennifer C. Lee, Employment and Earnings in High-Tech Ethnic Niches, Social Forces, Volume 91, Issue 3, March 2013, Pages 747--784, <https://doi.org/10.1093/sf/sos199>
+
+[4] Dreher GF, Lee J-Y, Clerkin TA. Mobility and Cash Compensation: The Moderating Effects of Gender, Race, and Executive Search Firms. Journal of Management. 2011;37(3):651-681. <https://doi.org/10.1177/0149206310365728>
+
+[5] S. Baltes, G. Park and A. Serebrenik, "Is 40 the New 60? How Popular Media Portrays the Employability of Older Software Developers," in IEEE Software, vol. 37, no. 6, pp. 26-31, Nov.-Dec. 2020, doi: 10.1109/MS.2020.3014178.
+
+[6] Juba, B. and H. S. Le, Precision-Recall Versus Accuracy and the Role of Large Data Sets, Association for the Advancement of Artificial Intelligence, 2018.
+
+[7] "How much data is required for machine learning?" https://www.quora.com/How-much-data-is-required-for-machine-learning
+
+[8] "Caret documentation on reproducibility" https://topepo.github.io/caret/model-training-and-tuning.html#notes-on-reproducibility
