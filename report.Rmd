@@ -454,7 +454,7 @@ RMSE for the linear regression base model is $101558.60.
 
 ### 5.4 Optimized Models
 
-We will be using optimizing via caret package's train function, all of which will use the following training control that ensures there will be five cross validations conducted in each train run.
+We will be using optimizing via caret package's train function, all of which will use the following training control that ensures there will be two cross validations conducted in each train run.
 
 This is here parallelization comes into play, as with this large datasize, running a long running training multiple times is averted due to multi-threading.
 
@@ -463,7 +463,7 @@ However as pointed below, parallelization is known to introduce reproducibility 
 ```{r train_control}
 train_control_default <- caret::trainControl(
   method = "cv",
-  number=5,
+  number=2,
   verboseIter = FALSE, # no training log
   allowParallel = TRUE, # FALSE for reproducible results 
   savePredictions="final"

@@ -59,14 +59,14 @@ test_set <- temp %>%
 removed <- anti_join(temp, test_set)
 train_set <- rbind(train_set, removed)
 
-# Base model
+# Base model training, prediction and RMSE
 base_lm <- lm(totalyearlycompensation ~ yearsofexperience + company + location, data=train_set)
 lm_predictions <- predict(base_lm, test_set, type="response")
 lm_rmse <- RMSE(lm_predictions,test_set$totalyearlycompensation)
-lm_rmse
 
 
-# Hyperparameter Tuning
+
+# XGBoost Hyperparameter Tuning
 xg_tune_grid <- expand.grid(
   nrounds = seq(from = 200, to = 1000, by = 50),
   eta = c(0.025, 0.05, 0.1, 0.3),
@@ -77,6 +77,7 @@ xg_tune_grid <- expand.grid(
   subsample = 1
 )
 
+# 2 Cross Validation
 train_control_default <- caret::trainControl(
   method = "cv",
   number=2,
@@ -85,20 +86,29 @@ train_control_default <- caret::trainControl(
   savePredictions="final"
 )
 
+# No cross-validation
 train_control_none <- caret::trainControl(
   method = "none",
   savePredictions="final",
 )
 
+# Required library for CPU parallelization
+# Accelerates Cross Validation by about 4 times
 library(doParallel)
+
+# Opens sockets for parallelization
+# And registers it for execution
+# caret package takes advantage of it
 cl <- makePSOCKcluster(4)
 registerDoParallel(cl)
 
+# Base linear regression optimized training
 lm_optimized <- train(totalyearlycompensation ~ yearsofexperience + company + location,
                       data=train_set,
                       method="lm",
                       trControl = train_control_default)
 
+# ElasticNet Optimized Training
 glmnet_optimized <- train(totalyearlycompensation ~ yearsofexperience + company + location,
                           data=train_set,
                           method="glmnet",
@@ -106,14 +116,14 @@ glmnet_optimized <- train(totalyearlycompensation ~ yearsofexperience + company 
                           trControl = train_control_default)
 
 
-## When you are done:
+## Stops parallelization
 stopCluster(cl)
 registerDoSEQ()
 
 
 
 # GPU Models
-
+# Tuned with optimized parameters XGBoot Training
 xg_optimized_model <- train(totalyearlycompensation ~ yearsofexperience + company + location,
                           data=train_set,
                           trControl = train_control_default,
@@ -122,6 +132,7 @@ xg_optimized_model <- train(totalyearlycompensation ~ yearsofexperience + compan
                           tree_method="gpu_hist",
                           verbose = TRUE)
 
+# Default tuning parameters XGBoost Training
 xg_normal_model <- train(totalyearlycompensation ~ yearsofexperience + company + location,
                             data=train_set,
                             trControl = train_control_default,
@@ -129,21 +140,19 @@ xg_normal_model <- train(totalyearlycompensation ~ yearsofexperience + company +
                             tree_method="gpu_hist",
                             verbose = TRUE)
 
+# Base Linear Regression Predictions and RMSE
 lm_optimized_predictions <- predict(lm_optimized, test_set, type="raw")
 lm_optimized_rmse <- RMSE(lm_optimized_predictions,test_set$totalyearlycompensation)
 
-
+# ElasticNet Predictions and RMSE
 glm_optimized_predictions <- predict(glmnet_optimized, test_set, type="raw")
 glm_optimized_rmse <- RMSE(glm_optimized_predictions,test_set$totalyearlycompensation)
 
-
-xg_default_predictions <- predict(xg_default_model, test_set, type="raw")
-xg_default_rmse <- RMSE(xg_default_predictions,test_set$totalyearlycompensation)
-
-
+# XGBoost Special Tuned Parameteres prediction and RMSE
 xg_optimized_predictions <- predict(xg_optimized_model, test_set, type="raw")
 xg_optimized_rmse <- RMSE(xg_optimized_predictions,test_set$totalyearlycompensation)
 
+# XGBoost Default Parameteres prediction and RMSE
 xg_normal_predictions <- predict(xg_normal_model, test_set, type="raw")
 xg_normal_rmse <- RMSE(xg_normal_predictions,test_set$totalyearlycompensation)
 
