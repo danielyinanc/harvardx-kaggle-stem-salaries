@@ -5,8 +5,9 @@ if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.
 if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.org")
 if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
 if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+if(!require(doParallel)) install.packages("doParallel", repos = "http://cran.us.r-project.org")
 
-# GPU version needs to be installed from daily
+# GPU version needs to be installed from stable build
 #if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
 
 # Enable required dependencies
@@ -17,7 +18,6 @@ library(readr)
 library(janitor)
 library(corrplot)
 library(xgboost)
-library(caretEnsemble)
 
 fl <- 'data-science-and-stem-salaries.zip'
 raw_fl <- 'Levels_Fyi_Salary_Data.csv'
