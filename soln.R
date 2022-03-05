@@ -171,9 +171,9 @@ max(test_set$totalyearlycompensation)
 # Minimum compensation
 min(test_set$totalyearlycompensation)
 
+# Save results to use in report
 results <- tibble(method="Linear Regression", rmse=lm_rmse)
 results <- results %>% add_row(method="ElasticNet Regression", rmse=glm_optimized_rmse)
 results <- results %>% add_row(method="XGBoost Default Tuning", rmse=xg_normal_rmse)
 results <- results %>% add_row(method="XGBoost Custom Tuned", rmse=xg_optimized_rmse)
-
 saveRDS(results,"final_results.RDS")
