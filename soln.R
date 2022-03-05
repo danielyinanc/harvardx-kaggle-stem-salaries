@@ -6,6 +6,8 @@ if(!require(readr)) install.packages("readr", repos = "http://cran.us.r-project.
 if(!require(janitor)) install.packages("janitor", repos = "http://cran.us.r-project.org")
 if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
 if(!require(doParallel)) install.packages("doParallel", repos = "http://cran.us.r-project.org")
+if(!require(stats)) install.packages("stats", repos = "http://cran.us.r-project.org")
+if(!require(glmnet)) install.packages("glmnet", repos = "http://cran.us.r-project.org")
 
 # GPU version needs to be installed from stable build
 #if(!require(xgboost)) install.packages("xgboost", repos = "http://cran.us.r-project.org")
