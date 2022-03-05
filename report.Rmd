@@ -95,17 +95,18 @@ Download locations can be found for result replication purposes
 
 In order to predict the ratings as a recommendation engine, I need to load initial variables to dataframes and transform them to a format that can be used later on.
 
-```{r dataprep, warning=FALSE}
-fl <- '~/datasets/Levels_Fyi_Salary_Data.csv'
-raw_data <- read_csv(fl)
+```{r dataprep, warning=FALSE, echo=FALSE}
+fl <- 'data-science-and-stem-salaries.zip'
+raw_fl <- 'Levels_Fyi_Salary_Data.csv'
+unzip(fl)
+raw_data <- read_csv(raw_fl)
 
 raw_data_sanitized <- clean_names(raw_data)
 
 # Drop id columns and derived columns
 raw_data_sanitized <- raw_data_sanitized %>% select(-cityid, -dmaid, -row_number)
 
-# Drop base_salary and bonus and stock grant variables as they are part of  
-# totalyearlycompensation
+# Drop base_salary and bonus and stock grant variables as they are part of totalyearlycompensation
 # Drop highly correlated columns
 raw_data_sanitized <- raw_data_sanitized %>% select(-basesalary, -stockgrantvalue, -bonus)
 ```
@@ -128,7 +129,7 @@ glimpse(raw_data_sanitized)
 
 Our models will target to predict Total Yearly Compensation (totalyearlycompensation) using all other variables. Let's take a peek at the salient features of this variable for us to understand what this variable is and any important properties we can glean.
 
-```{r totalyearlycompensation_stats }
+```{r totalyearlycompensation_stats, echo=FALSE }
 raw_data_sanitized %>% select(totalyearlycompensation) %>%
   summarise(
     n = n(),
@@ -189,7 +190,7 @@ Levels are company specific employee compensation categorizations such as ICT3-6
 
 We can see below from grouped means, levels themselves are actually a by-product of company variable, as they are inventions of companies themselves to determine where in reporting and compensation hierarchy people are.
 
-```{r levels_company_stats}
+```{r levels_company_stats, echo=FALSE}
 raw_data_sanitized %>% group_by(company, level) %>% summarize(mean_comp = mean(totalyearlycompensation)) %>% arrange(desc(mean_comp))
 
 ```
@@ -199,7 +200,7 @@ Another problem we are facing with levels is illustrated below, entries are inco
 
 Self-provided data like this has these natural weak points that we must take into consideration when selecting variables to use as part of our model.
 
-```{r levels_stats}
+```{r levels_stats, echo=FALSE}
 raw_data_sanitized %>% filter(company == "Facebook") %>% group_by(level) %>%
   summarize(mean_comp = mean(totalyearlycompensation), cnt=n()) %>% arrange(desc(mean_comp))
 ```
@@ -225,16 +226,20 @@ Location variable is the physical location where the compensation data pertains 
 
 Let us see if this prediction of ours have the data backing needed to support this hunch to the level of us elevating location as a strong predictor variable.
 
-```{r location_stats}
+```{r location_stats, echo=FALSE}
 raw_data_sanitized %>% group_by(location) %>%
-  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
+  summarize(mean_comp = mean(totalyearlycompensation), 
+            cnt=n(), stdev = 
+              sd(totalyearlycompensation)) %>%arrange(desc(mean_comp))
 ```
 
 If we clean-up one-off locations by asking for at least 25 data points on a single location, real picture emerges far more clearly indicating California as the main location for high tech salaries. This is in congruence with our domain knowledge hinting at Silicon Valley effect on salaries.
 
-```{r location_stats_cleanedup}
+```{r location_stats_cleanedup, echo=FALSE}
 raw_data_sanitized %>% group_by(location) %>%
-  summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% filter(cnt >= 25) %>% arrange(desc(mean_comp))
+  summarize(mean_comp = mean(totalyearlycompensation), 
+            cnt=n(), stdev = sd(totalyearlycompensation)) %>%  
+  filter(cnt >= 25) %>% arrange(desc(mean_comp))
 ```
 
 Except a single entry from state of Washington, all top entries are in continental United States and are all in California. Not only that but all these cities and towns are within the definition of Silicon Valley. 
@@ -280,7 +285,7 @@ raw_data_sanitized %>% group_by(education) %>%
   summarize(mean_comp = mean(totalyearlycompensation), cnt=n(), stdev = sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
 ```
 
-About 50 percent of all compensation entries lack education variables are missing as above. We will not be using education as a predictive variable as significant lack of available data reduced its usefulness. 
+About 50 percent of all compensation entries education variables are missing as NA entries above. We will not be using education as a predictive variable as significant lack of available data reduced its usefulness. 
 
 ```{r education_plot, echo=FALSE}
 raw_data_sanitized %>% filter(gender %in% c("Female", "Male")) %>%  
@@ -299,7 +304,7 @@ raw_data_sanitized %>% group_by(race) %>%
               sd(totalyearlycompensation)) %>% arrange(desc(mean_comp))
 ```
 
-However 2/3 of data is missing with 40,215 NAs which reduces the usability of this variable for us. We won't be using it as part of our predictive model due to majority of it being unreported.
+However 2/3 of data is missing with about 40,000 NAs which reduces the usability of this variable for us. We won't be using it as part of our predictive model due to majority of it being unreported.
 
 ### 4.1.8 Tag
 
@@ -390,9 +395,13 @@ We will be developing machine learning algorithm for predicting totalyearlycompe
 
 Using linear regression as the base model, we will build two additional machine learning models of greater complexity: ElasticNet and XGBoost to see which one will have the lowest RMSE score as our comparison metric.
 
+We will NOT be using test data for training purposes, our RMSE comparison to determine which model performs the best will be strictly conducted on test data set predictions while using models trained on training data as industry best practice.
+
+We will be using cross-validation and caret package's tuning ability to optimize the final model to its full capabilities.
+
 ## 5.1 Downsampling 
 
-Even with paralls library achieiving CPU threading and GPU acceleration, full training cycle takes many hours and requires over 50GB of memory. Recognizing these limitations, I used randomly sampled results which lead to some interesting insights about data size and algorithmic efficiency, which will be discussed fully in conclusion section.
+Even with doParallels library achieving CPU threading and GPU acceleration on XGBoost, full training cycle takes many hours and requires over 50GB of memory. Recognizing these limitations, I used randomly sampled results which lead to some interesting insights about data size and algorithmic efficiency, which will be discussed fully in conclusion section.
 
 ## 5.2 Training and Test Set Creation
 
@@ -408,10 +417,12 @@ In order to ensure that categorical variables of interest (company and location)
 set.seed(1,sample.kind="Rounding")
 size <- nrow(raw_data_sanitized)
 
-relevant_data <- raw_data_sanitized %>% select(totalyearlycompensation, yearsofexperience, company, location)
+relevant_data <- raw_data_sanitized %>%   
+  select(totalyearlycompensation, yearsofexperience, company, location)
 complete_data <- relevant_data[sample(nrow(raw_data_sanitized), size),]
 
-test_index <- createDataPartition(y=complete_data$totalyearlycompensation, times=1, p=0.1, list=FALSE)
+test_index <- createDataPartition(y=complete_data$totalyearlycompensation, 
+                                  times=1, p=0.1, list=FALSE)
 
 train_set <- complete_data[-test_index,]
 temp <- complete_data[test_index,]
@@ -439,7 +450,7 @@ lm_predictions <- predict(base_lm, test_set, type="response")
 lm_rmse <- RMSE(lm_predictions,test_set$totalyearlycompensation)
 ```
 
-RMSE for the linear regression base model is $88244.16.
+RMSE for the linear regression base model is $101558.60.
 
 ### 5.4 Optimized Models
 
@@ -482,7 +493,7 @@ lm_optimized_rmse <- RMSE(lm_optimized_predictions,test_set$totalyearlycompensat
 
 As predicted, optimized linear regression result matches the base linear case in line with theory.
 
-Same RMSE score as the linear regression case, $88244.16.
+Same RMSE score as the linear regression case, $101558.60.
 
 ### 5.4.2 Elastic Net Regression
 
@@ -490,20 +501,15 @@ Elastic net model is a regularized regression model combining both Lasso and Rid
 
 Considering we have a very large number of categorical variables, L1 penalty we expect to help us reduce feature-space, while L2 helps us improve accuracy by bringing results closer to a mean value.
 
-There are two tunable parameters Alpha and Beta where Alpha is for the elastic net mixing parameter, 0 represents a ridge while 1 represents lasso (default).
+Using default optimization parameters of Caret as below:
 
 ```{r glmnet, eval=FALSE}
 
-tuneGrid <- expand.grid(alpha = seq(0, 1, 0.05), lambda = seq(0.0001, 1, length = 10))
-
-glmnet_optimized <- train(totalyearlycompensation ~ yearsofexperience  + 
-                            company + location,
-                      data=train_set,
-                      method="glmnet",
-                      tuneGrid = tuneGrid,
-                      metric = "RMSE",
-                      na.action  = na.pass,
-                      trControl = train_control_default)
+glmnet_optimized <- train(totalyearlycompensation ~ yearsofexperience + company + location,
+                          data=train_set,
+                          method="glmnet",
+                          na.action  = na.pass,
+                          trControl = train_control_default)
 
 glmnet_optimized_predictions <- predict(glmnet_optimized, test_set, type="raw")
 glmnet_optimized_rmse <-  
@@ -511,12 +517,22 @@ glmnet_optimized_rmse <-
 
 ```
 
-Results are better than the base case with an RMSE of $88001.53. 
+Optimized model results are about the same as the base case with an RMSE of $101565.60. 
 
 
-### 5.3.3 Gradient Boost Tree
+### 5.4.3 Gradient Boost Tree
 
-Gradient boosting is a technique that is designed to take advantage of ensembling a large number of weak predictors (usually decision trees) 
+Gradient boosting is a technique that is designed to take advantage of ensembling a large number of weak predictors (usually decision trees).
+
+On default optimization characteristics with same cross-validation, Gradient Boosted Tree model had the lowest RMSE score (100386.64) in comparison to other models.
+
+In order to optimize the model via customized tuning, I focused on three key tuning parameters:
+
+* nrounds: Variable representing how many boosted trees are added as part of cross-validation.We are using a sequence from 200, to 1000 by increments of 50.
+* eta: Controls learning rate, we are changing it from 0.025 to 0.3.
+* max_depth: This controls the depth of tree, larger the value greater chance of overfitting due to model complexity.
+
+All other tuning parameters are the defaults selected by XGBoost package.
 
 ```{r xgboost, eval=FALSE}
 xg_tune_grid <- expand.grid(
@@ -544,29 +560,29 @@ xgboost_optimized_rmse <- RMSE(xgboost_optimized_predictions,test_set$totalyearl
 
 ```
 
-XGBoost model's RMSE is $85333.43, lowest in comparison to other models. Also must point out that it is fastest to train with such a large dataset, thanks to GPU acceleration.
+Optimized XGBoost model's RMSE is $98605.52, lowest in comparison to other models. It is also the fastest to train with such a large dataset, thanks to GPU acceleration.
 
 ```{r load_results, echo=FALSE}
-model_results <- readRDS('results.RDS')
+model_results <- readRDS('final_results.RDS')
 ```
 
 # 6. Results
 Utilizing caret and its training control and tuning capabilities to optimize all three models below.
 
-When possible utilized parallels package for CPU intensive models (lm and glmnet) and GPU optimized version of XGBoost package in order to be able to process this large dataset utilizing a modest home computer as IDE.
+When possible utilized doParallel package for CPU intensive models (lm and glmnet) and GPU optimized version of XGBoost package in order to be able to process this large dataset utilizing a modest home computer.
 
-In order to build the case for best model, we developed our machine learning models with progressively using more data starting with 1,000 data entries to culminating with the entire data set (62,000+).
+In order to build the case for best model, I developed my machine learning models with progressively using more data starting with 1,000 data entries to culminating with the entire data set (62,000+).
 
-We have looked into comparing results of three machine learning models:
+I have looked into comparing results of three machine learning models:
 - Baseline: Linear regression, using lm package. 
 - Generalized Regression: Lasso and Ridge regression combined, using glmnet package.
 - Gradient Boosting: Gradient boosted decision trees, using xgboost package. 
 
 
 ## 6.1 Model Results
-We found best model to be XGBoost with an RMSE of 85333.43, considering our maximum yearly compensation is $4,680,000+, with a standard deviation of $133051.6, our optimized XGBoost model's RMSE is about 65% of the standard deviation of data.
+I found best model to be XGBoost with an RMSE of $98605.51, considering our maximum yearly compensation is $4,680,000+, with a standard deviation of $137977.1, our optimized XGBoost model's RMSE is about 71% of the standard deviation of complete data set.
 
-Below, we can find the comparison between all three models trained using different data sizes:
+Below, we can find the comparison between all three models trained:
 
 ```{r results_table}
 knitr::kable(model_results, caption="All models and results")
@@ -574,7 +590,7 @@ knitr::kable(model_results, caption="All models and results")
 ## 6.2 Important Variables
 As we look into variables we utilized in the model through varImp command, we can obtain a list of critical list of variables that shed a very strong light on total compensation for tech employees.
 
-List of variables are as following:
+20 top variables are as following:
 
 * yearsofexperience
 * company
@@ -589,15 +605,17 @@ List of variables are as following:
   * San Francisco,CA
   * Seattle, WA
   * Bengalore, India
+  * Mountain View, CA
+  * Menlo Park, CA
+  * Sunnyvale, CA
+  * Cupertino, CA
+  * New York, NY
+  * Hyderabad, India
+  * Palo Alto, CA
+  * San Jose, CA
+  * Bengaluru, India
 
-This finding matches with domain research about concentrated tech cities and their impact on STEM salaries, demonstrating how our gradient boosted method gleaned the importance of Silicon Valley and top tech firms as core ingredients of high compensation with years of experience in the field.
-
-## 6.3 Impact of Data Size on Model Development
-A very interesting finding above is, for smaller data sizes linear regression outpaces both lasso and ridge regression easily, which was surprising. However considering the number of companies (1623), and the fact that company variable is actually transformed via one-hot-encoding under the hood by Caret, we can perhaps see why.
-
-Exact requirements for a machine learning model's data point needs is still an academic debate [6], however a number of "thumb rules" are presented by practitioners [7] pointing out a certain number per independent variable as the minimum.
-
-About 1600 variables in the final model also has a major impact on performance which we can easily see if we consider that our training data matrix is 55,800 x 1625, vast majority of which is long-text. In order to run the full model, I had to upgrade memory of my laptop to 64GB and it was barely enough. 
+This finding aligns very well with domain research about concentrated tech cities and their impact on STEM salaries, demonstrating how our gradient boosted method gleaned the importance of top tech cities and top tech firms as core ingredients of high compensation with years of experience driving as the most important variable.
 
 # 7. Conclusion
 We can see from above analysis and modelling results that yearsofexperience, company and location are the primary drivers of total compensation of a tech worker. 
@@ -609,7 +627,6 @@ We must consider the limitations of the study such as, data quality concerns on 
 Another key concern we must take into account is the self-reported nature of levels.fyi dataset, potentially introducing bias that we are unable to account for as compensation data is one of the most heavily guarded and protected secret of individuals and companies alike. As far as my research goes, I could not locate another data source to use as a comparison to be able to validate levels.fyi dataset.
 
 Next step in enhancing accuracy of our predictive model is to focus on data clean-up efforts to clean some of the categorical variables and develop mechanisms to deal with missing values in other categorical values. Both of these efforts require domain knowledge such as actual levels within the firms as well as context specific methodologies to account for missing values for education and/or race and/or gender variables. Extant academic research imply relationship between these variables and total annual compensation, which means if we are able to overcome data quality concerns, they should aid in building an even more accurate predictive model.
-
 
 
 # 8. References

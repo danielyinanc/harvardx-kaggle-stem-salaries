@@ -39,8 +39,6 @@ summary(raw_data_sanitized)
 
 
 # Create train and test datasets -- 0.9 train, 0.1 test
-# By chaning size variable to 1000, 10000 and 30000
-# Report results can be replicated
 
 set.seed(1,sample.kind="Rounding")
 size <- nrow(raw_data_sanitized)
@@ -69,16 +67,6 @@ lm_rmse
 
 
 # Hyperparameter Tuning
-xg_grid_default <- expand.grid(
-  nrounds = 100,
-  max_depth = 6,
-  eta = 0.3,
-  gamma = 0,
-  colsample_bytree = 1,
-  min_child_weight = 1,
-  subsample = 1
-)
-
 xg_tune_grid <- expand.grid(
   nrounds = seq(from = 200, to = 1000, by = 50),
   eta = c(0.025, 0.05, 0.1, 0.3),
@@ -87,10 +75,6 @@ xg_tune_grid <- expand.grid(
   colsample_bytree = 1,
   min_child_weight = 1,
   subsample = 1
-)
-
-rf_grid_default <- expand.grid(
-  mtry = 2
 )
 
 train_control_default <- caret::trainControl(
@@ -129,13 +113,6 @@ registerDoSEQ()
 
 
 # GPU Models
-xg_default_model <- train(totalyearlycompensation ~ yearsofexperience + company + location,
-                          data=train_set,
-                          trControl = train_control_none,
-                          tuneGrid = xg_grid_default,
-                          method = "xgbTree",
-                          tree_method="gpu_hist",
-                          verbose = TRUE)
 
 xg_optimized_model <- train(totalyearlycompensation ~ yearsofexperience + company + location,
                           data=train_set,
@@ -145,42 +122,49 @@ xg_optimized_model <- train(totalyearlycompensation ~ yearsofexperience + compan
                           tree_method="gpu_hist",
                           verbose = TRUE)
 
+xg_normal_model <- train(totalyearlycompensation ~ yearsofexperience + company + location,
+                            data=train_set,
+                            trControl = train_control_default,
+                            method = "xgbTree",
+                            tree_method="gpu_hist",
+                            verbose = TRUE)
+
 lm_optimized_predictions <- predict(lm_optimized, test_set, type="raw")
 lm_optimized_rmse <- RMSE(lm_optimized_predictions,test_set$totalyearlycompensation)
-#94476.03
+
 
 glm_optimized_predictions <- predict(glmnet_optimized, test_set, type="raw")
 glm_optimized_rmse <- RMSE(glm_optimized_predictions,test_set$totalyearlycompensation)
-#88382.18
+
 
 xg_default_predictions <- predict(xg_default_model, test_set, type="raw")
 xg_default_rmse <- RMSE(xg_default_predictions,test_set$totalyearlycompensation)
-#89886.81
+
 
 xg_optimized_predictions <- predict(xg_optimized_model, test_set, type="raw")
 xg_optimized_rmse <- RMSE(xg_optimized_predictions,test_set$totalyearlycompensation)
 
+xg_normal_predictions <- predict(xg_normal_model, test_set, type="raw")
+xg_normal_rmse <- RMSE(xg_normal_predictions,test_set$totalyearlycompensation)
+
+# Top 20 important variables of the model
 varImp(xg_optimized_model)
-#top variables are 
-# yearsofexperience
-# company{Facebook,Google,Netflix,Snap,Apple,Uber,LinkedIn}
-# location{San Francisco,CA, Seattle, WA, Bengalore, India}
 
-sd(test_set$totalyearlycompensation)
-# 133051.6
+# Standard deviation of predicted variable
+sd(complete_data$totalyearlycompensation)
 
-round(xg_optimized_rmse/sd(test_set$totalyearlycompensation) * 100)
-# XgBoost optimized model RMSE is about 64 percent of the standard deviation of population
-# this is not a bad outcome
+# Error as a percentage of standard deviation
+round(xg_optimized_rmse/sd(complete_data$totalyearlycompensation) * 100)
 
+# Maximum compensation
 max(test_set$totalyearlycompensation)
-# 1605000
 
+# Minimum compensation
 min(test_set$totalyearlycompensation)
-# 10000
 
-# With a massive range from 10K to 1.6M, with a skewed distribution and outliers, machine 
-# learning accuracy is always a challenge
-# 
+results <- tibble(method="Linear Regression", rmse=lm_rmse)
+results <- results %>% add_row(method="ElasticNet Regression", rmse=glm_optimized_rmse)
+results <- results %>% add_row(method="XGBoost Default Tuning", rmse=xg_normal_rmse)
+results <- results %>% add_row(method="XGBoost Custom Tuned", rmse=xg_optimized_rmse)
 
-
+saveRDS(results,"final_results.RDS")
